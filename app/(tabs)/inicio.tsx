@@ -1,6 +1,15 @@
 import { supabase } from "@/lib/supabase";
-import { useEffect, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+
+function normalizarTipo(tipo?: string | null) {
+  return String(tipo || "").trim().toLowerCase();
+}
+
+function montoAbsoluto(monto: number | string) {
+  return Math.abs(Number(monto) || 0);
+}
 
 export default function Inicio() {
   const [nombre, setNombre] = useState("");
@@ -8,11 +17,7 @@ export default function Inicio() {
   const [totalGastos, setTotalGastos] = useState(0);
   const [movimientos, setMovimientos] = useState<any[]>([]);
 
-  useEffect(() => {
-    cargarDatos();
-  }, []);
-
-  async function cargarDatos() {
+  const cargarDatos = useCallback(async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -26,30 +31,75 @@ export default function Inicio() {
       .single();
     if (perfil) setNombre(perfil.nombre);
 
-    // Cargar movimientos del mes actual
-    const inicioMes = new Date();
-    inicioMes.setDate(1);
-
-    const { data: movs } = await supabase
+    const { data: movs, error: errorMovs } = await supabase
       .from("movimiento")
-      .select("*, categoria(nombre, icono)")
+      .select("id, categoria_id, tipo, monto, fecha, descripcion, created_at")
       .eq("usuario_id", user.id)
-      .gte("fecha", inicioMes.toISOString().split("T")[0])
-      .order("created_at", { ascending: false })
-      .limit(5);
+      .order("fecha", { ascending: false });
 
-    if (movs) {
-      setMovimientos(movs);
-      const ingresos = movs
-        .filter((m) => m.tipo === "ingreso")
-        .reduce((sum, m) => sum + m.monto, 0);
-      const gastos = movs
-        .filter((m) => m.tipo === "gasto")
-        .reduce((sum, m) => sum + m.monto, 0);
+    if (errorMovs) {
+      console.log("Error cargando movimientos de inicio:", errorMovs.message);
+      setTotalIngresos(0);
+      setTotalGastos(0);
+      setMovimientos([]);
+    } else {
+      const movimientosUsuario = (movs || []).sort((a, b) => {
+          const fechaA = `${a.fecha || ""} ${a.created_at || ""}`;
+          const fechaB = `${b.fecha || ""} ${b.created_at || ""}`;
+          return fechaB.localeCompare(fechaA);
+        });
+      const ingresos = movimientosUsuario
+        .filter((m) => normalizarTipo(m.tipo) === "ingreso")
+        .reduce((sum, m) => sum + montoAbsoluto(m.monto), 0);
+      const gastos = movimientosUsuario
+        .filter((m) => normalizarTipo(m.tipo) === "gasto")
+        .reduce((sum, m) => sum + montoAbsoluto(m.monto), 0);
       setTotalIngresos(ingresos);
       setTotalGastos(gastos);
+      console.log("inicio movimientos usuario:", movimientosUsuario.length);
+      console.log("inicio ingresos:", ingresos);
+      console.log("inicio gastos:", gastos);
+
+      const categoriaIds = [
+        ...new Set(
+          movimientosUsuario
+            .map((mov) => mov.categoria_id)
+            .filter((id) => Boolean(id)),
+        ),
+      ];
+
+      let categoriasPorId: Record<string, any> = {};
+      if (categoriaIds.length > 0) {
+        const { data: cats, error: errorCats } = await supabase
+          .from("categoria")
+          .select("id, nombre, icono")
+          .in("id", categoriaIds);
+
+        if (errorCats) {
+          console.log("Error cargando categorias del inicio:", errorCats.message);
+        } else {
+          categoriasPorId = Object.fromEntries(
+            (cats || []).map((cat) => [cat.id, cat]),
+          );
+        }
+      }
+
+      const ultimos = movimientosUsuario
+        .slice(0, 5)
+        .map((mov) => ({
+          ...mov,
+          categoria: categoriasPorId[mov.categoria_id] || null,
+        }));
+
+      setMovimientos(ultimos);
     }
-  }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      cargarDatos();
+    }, [cargarDatos]),
+  );
 
   const saldo = totalIngresos - totalGastos;
 
@@ -69,7 +119,14 @@ export default function Inicio() {
       {/* Tarjeta saldo */}
       <View style={styles.cardSaldo}>
         <Text style={styles.saldoLabel}>Saldo del mes</Text>
-        <Text style={styles.saldoMonto}>S/ {saldo.toFixed(2)}</Text>
+        <Text
+          style={[
+            styles.saldoMonto,
+            { color: saldo >= 0 ? "#22c55e" : "#ef4444" },
+          ]}
+        >
+          S/ {saldo.toFixed(2)}
+        </Text>
         <View style={styles.saldoRow}>
           <View>
             <Text style={styles.saldoSub}>↑ Ingresos</Text>
@@ -101,17 +158,23 @@ export default function Inicio() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.movDesc}>
-                {mov.descripcion || mov.categoria?.nombre}
+                {mov.descripcion || mov.categoria?.nombre || "Movimiento"}
               </Text>
               <Text style={styles.movFecha}>{mov.fecha}</Text>
             </View>
             <Text
               style={[
                 styles.movMonto,
-                { color: mov.tipo === "ingreso" ? "#22c55e" : "#ef4444" },
+                {
+                  color:
+                    normalizarTipo(mov.tipo) === "ingreso"
+                      ? "#22c55e"
+                      : "#ef4444",
+                },
               ]}
             >
-              {mov.tipo === "ingreso" ? "+" : "-"} S/ {mov.monto.toFixed(2)}
+              {normalizarTipo(mov.tipo) === "ingreso" ? "+" : "-"}S/{" "}
+              {montoAbsoluto(mov.monto).toFixed(2)}
             </Text>
           </View>
         ))

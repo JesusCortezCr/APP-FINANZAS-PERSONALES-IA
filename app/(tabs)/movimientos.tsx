@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import {
   ScrollView,
   StyleSheet,
@@ -8,44 +9,103 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
+function normalizarTipo(tipo?: string | null) {
+  return String(tipo || "").trim().toLowerCase();
+}
+
+function montoAbsoluto(monto: number | string) {
+  return Math.abs(Number(monto) || 0);
+}
+
 export default function Movimientos() {
   const [movimientos, setMovimientos] = useState<any[]>([]);
   const [filtro, setFiltro] = useState<"todos" | "ingreso" | "gasto">("todos");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    cargarMovimientos();
-  }, [filtro]);
-
-  async function cargarMovimientos() {
+  const cargarMovimientos = useCallback(async () => {
     setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     let query = supabase
       .from("movimiento")
-      .select("*, categoria(nombre, icono)")
+      .select("id, categoria_id, tipo, tipo_registro, monto, fecha, descripcion")
       .eq("usuario_id", user.id)
       .order("fecha", { ascending: false });
 
     if (filtro !== "todos") query = query.eq("tipo", filtro);
 
-    const { data } = await query;
-    if (data) setMovimientos(data);
+    const { data, error } = await query;
+
+    if (error) {
+      console.log("Error cargando movimientos:", error.message);
+      setMovimientos([]);
+      setLoading(false);
+      return;
+    }
+
+    const listaMovimientos = data || [];
+    const categoriaIds = [
+      ...new Set(
+        listaMovimientos
+          .map((mov) => mov.categoria_id)
+          .filter((id) => Boolean(id)),
+      ),
+    ];
+
+    let categoriasPorId: Record<string, any> = {};
+    if (categoriaIds.length > 0) {
+      const { data: cats, error: errorCats } = await supabase
+        .from("categoria")
+        .select("id, nombre, icono")
+        .in("id", categoriaIds);
+
+      if (errorCats) {
+        console.log("Error cargando categorias de movimientos:", errorCats.message);
+      } else {
+        categoriasPorId = Object.fromEntries(
+          (cats || []).map((cat) => [cat.id, cat]),
+        );
+      }
+    }
+
+    setMovimientos(
+      listaMovimientos.map((mov) => ({
+        ...mov,
+        categoria: categoriasPorId[mov.categoria_id] || null,
+      })),
+    );
     setLoading(false);
-  }
+  }, [filtro]);
+
+  useFocusEffect(
+    useCallback(() => {
+      cargarMovimientos();
+    }, [cargarMovimientos]),
+  );
 
   async function handleEliminar(id: string) {
     const { error } = await supabase.from("movimiento").delete().eq("id", id);
     if (!error) cargarMovimientos();
   }
 
-  const totalMostrado = movimientos.reduce(
-    (sum, m) => (m.tipo === "ingreso" ? sum + m.monto : sum - m.monto),
-    0,
-  );
+  const totalIngresos = movimientos
+    .filter((m) => normalizarTipo(m.tipo) === "ingreso")
+    .reduce((sum, m) => sum + montoAbsoluto(m.monto), 0);
+  const totalGastos = movimientos
+    .filter((m) => normalizarTipo(m.tipo) === "gasto")
+    .reduce((sum, m) => sum + montoAbsoluto(m.monto), 0);
+  const totalMostrado =
+    filtro === "gasto"
+      ? -totalGastos
+      : filtro === "ingreso"
+        ? totalIngresos
+        : totalIngresos - totalGastos;
 
   return (
     <ScrollView style={styles.container}>
@@ -90,7 +150,7 @@ export default function Movimientos() {
             { color: totalMostrado >= 0 ? "#22c55e" : "#ef4444" },
           ]}
         >
-          S/ {Math.abs(totalMostrado).toFixed(2)}
+          {totalMostrado < 0 ? "-" : ""}S/ {Math.abs(totalMostrado).toFixed(2)}
         </Text>
       </View>
 
@@ -124,10 +184,16 @@ export default function Movimientos() {
               <Text
                 style={[
                   styles.movMonto,
-                  { color: mov.tipo === "ingreso" ? "#22c55e" : "#ef4444" },
+                  {
+                    color:
+                      normalizarTipo(mov.tipo) === "ingreso"
+                        ? "#22c55e"
+                        : "#ef4444",
+                  },
                 ]}
               >
-                {mov.tipo === "ingreso" ? "+" : "-"} S/ {mov.monto.toFixed(2)}
+                {normalizarTipo(mov.tipo) === "ingreso" ? "+" : "-"}S/{" "}
+                {montoAbsoluto(mov.monto).toFixed(2)}
               </Text>
               <TouchableOpacity onPress={() => handleEliminar(mov.id)}>
                 <Text style={styles.eliminar}>Eliminar</Text>
