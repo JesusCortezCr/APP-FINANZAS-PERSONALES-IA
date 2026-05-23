@@ -11,7 +11,19 @@ const COLORS = ["#6366f1", "#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#ec4899"
 
 function money(v: number) { return `S/ ${Math.abs(v).toLocaleString("es-PE", { minimumFractionDigits: 2 })}`; }
 function mabs(v: number | string) { return Math.abs(Number(v) || 0); }
-function mkey(f?: string | null) { return String(f || "").slice(0, 7); }
+function mkey(f?: string | null) { 
+  if (!f) return "";
+  try {
+    // Intentamos parsear la fecha para asegurar formato YYYY-MM constante
+    const d = new Date(f.includes('T') ? f : f + "T12:00:00");
+    if (isNaN(d.getTime())) return String(f).trim().slice(0, 7);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    return `${y}-${m}`;
+  } catch (e) {
+    return String(f).trim().slice(0, 7);
+  }
+}
 function mlabel(k: string) {
   if (!k) return "—";
   const [y, m] = k.split("-");
@@ -33,7 +45,12 @@ function clean(t: string) {
 export default function Reportes() {
   const [movs, setMovs] = useState<Mov[]>([]);
   const [loading, setLoading] = useState(true);
-  const [mes, setMes] = useState(new Date().toISOString().slice(0, 7));
+  const [mes, setMes] = useState(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    return `${y}-${m}`;
+  });
   
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMsg, setChatMsg] = useState("");
@@ -76,61 +93,70 @@ export default function Reportes() {
   useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   const df = useMemo(() => {
-    const dm = movs.filter(m => mkey(m.fecha) === mes) || [];
-    const ks = [...new Set(movs.map(m => mkey(m.fecha)))].filter(Boolean).sort((a,b) => b.localeCompare(a)).slice(0, 12);
-    const ingL = dm.filter(m => m.tipo?.toLowerCase() === "ingreso");
-    const gasL = dm.filter(m => m.tipo?.toLowerCase() === "gasto");
+    const dm = movs.filter(m => mkey(m.fecha) === mes);
+    const ks = [...new Set(movs.map(m => mkey(m.fecha)))].filter(k => k && k.length >= 7).sort((a,b) => b.localeCompare(a)).slice(0, 12);
     
-    const tI = ingL.reduce((s, m) => s + m.monto, 0);
-    const tG = gasL.reduce((s, m) => s + m.monto, 0);
-    const aTotal = movs.filter(m => m.tipo?.toLowerCase() === "ingreso").reduce((s, m) => s + m.monto, 0) - 
-                   movs.filter(m => m.tipo?.toLowerCase() === "gasto").reduce((s, m) => s + m.monto, 0);
+    const ingL = dm.filter(m => String(m.tipo || "").trim().toLowerCase() === "ingreso");
+    const gasL = dm.filter(m => String(m.tipo || "").trim().toLowerCase() === "gasto");
+    
+    const tI = ingL.reduce((s, m) => s + Number(m.monto || 0), 0);
+    const tG = gasL.reduce((s, m) => s + Number(m.monto || 0), 0);
+    const aTotal = movs.filter(m => String(m.tipo || "").trim().toLowerCase() === "ingreso").reduce((s, m) => s + Number(m.monto || 0), 0) - 
+                   movs.filter(m => String(m.tipo || "").trim().toLowerCase() === "gasto").reduce((s, m) => s + Number(m.monto || 0), 0);
 
-    const iMayor = ingL.length > 0 ? [...ingL].sort((a,b) => b.monto - a.monto)[0] : null;
-    const iMenor = ingL.length > 0 ? [...ingL].sort((a,b) => a.monto - b.monto)[0] : null;
-    const gMayor = gasL.length > 0 ? [...gasL].sort((a,b) => b.monto - a.monto)[0] : null;
-    const gMenor = gasL.length > 0 ? [...gasL].sort((a,b) => a.monto - b.monto)[0] : null;
+    const iMayor = ingL.length > 0 ? [...ingL].sort((a,b) => Number(b.monto) - Number(a.monto))[0] : null;
+    const iMenor = ingL.length > 0 ? [...ingL].sort((a,b) => Number(a.monto) - Number(b.monto))[0] : null;
+    const gMayor = gasL.length > 0 ? [...gasL].sort((a,b) => Number(b.monto) - Number(a.monto))[0] : null;
+    const gMenor = gasL.length > 0 ? [...gasL].sort((a,b) => Number(a.monto) - Number(b.monto))[0] : null;
 
     const cats: Record<string, any> = {};
     gasL.forEach(m => {
       const k = m.categoria_id || "sin";
       if (!cats[k]) cats[k] = { nombre: m.categoria?.nombre || "Varios", total: 0 };
-      cats[k].total += m.monto;
+      cats[k].total += Number(m.monto || 0);
     });
 
     const medios: Record<string, number> = {};
     gasL.forEach(m => {
       const med = m.medio_pago || "Efectivo";
-      medios[med] = (medios[med] || 0) + m.monto;
+      medios[med] = (medios[med] || 0) + Number(m.monto || 0);
     });
 
     const heat = Array.from({ length: 31 }, (_, i) => {
-      const day = String(i + 1).padStart(2, "0");
-      const f = `${mes}-${day}`;
-      const tot = gasL.filter(m => m.fecha === f).reduce((s, m) => s + m.monto, 0);
-      return { day: i + 1, total: tot };
+      const day = i + 1;
+      const tot = gasL.filter(m => {
+        if (!m.fecha) return false;
+        const parts = m.fecha.split("-");
+        return Number(parts[2]) === day;
+      }).reduce((s, m) => s + Number(m.monto || 0), 0);
+      return { day, total: tot };
     });
 
     const gSemana = Array(7).fill(0);
     gasL.forEach(m => {
-      const d = new Date(m.fecha + "T12:00:00").getDay();
-      gSemana[d] += m.monto;
+      try {
+        const d = new Date(m.fecha + "T12:00:00").getDay();
+        gSemana[d] += Number(m.monto || 0);
+      } catch (e) {}
     });
 
     const evol = ks.slice(0, 6).reverse().map(k => {
       const ms = movs.filter(m => mkey(m.fecha) === k);
-      const i = ms.filter(m => m.tipo?.toLowerCase() === "ingreso").reduce((s, m) => s + m.monto, 0);
-      const g = ms.filter(m => m.tipo?.toLowerCase() === "gasto").reduce((s, m) => s + m.monto, 0);
+      const i = ms.filter(m => String(m.tipo || "").trim().toLowerCase() === "ingreso").reduce((s, m) => s + Number(m.monto || 0), 0);
+      const g = ms.filter(m => String(m.tipo || "").trim().toLowerCase() === "gasto").reduce((s, m) => s + Number(m.monto || 0), 0);
       return { label: mlabel(k), ing: i, gas: g, ahorro: i - g };
     });
 
     const recs = [];
     if (tG > tI) recs.push({ t: "Déficit Detectado", d: `Gastas ${money(tG-tI)} más de lo que ingresas.`, i: "warning", c: "#ef4444" });
     const topC = Object.values(cats).sort((a:any,b:any) => b.total - a.total)[0] as any;
-    if (topC) recs.push({ t: `Foco en ${topC.nombre}`, d: `Concentras el ${((topC.total/tG)*100).toFixed(0)}% de tus gastos aquí.`, i: "pie-chart", c: "#f59e0b" });
+    if (topC) recs.push({ t: `Foco en ${topC.nombre}`, d: `Concentras el ${tG > 0 ? ((topC.total/tG)*100).toFixed(0) : 0}% de tus gastos aquí.`, i: "pie-chart", c: "#f59e0b" });
     if (tI > 0) recs.push({ t: "Meta de Ahorro", d: `Si separas el 20%, tendrías ${money(tI*0.2)} asegurados.`, i: "leaf", c: "#22c55e" });
-    const dP = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][gSemana.indexOf(Math.max(...gSemana))];
-    recs.push({ t: "Día Crítico", d: `Ten cuidado los ${dP}, son tus días de mayor consumo.`, i: "calendar", c: "#8b5cf6" });
+    
+    const maxSemana = Math.max(...gSemana);
+    const dP = maxSemana > 0 ? ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][gSemana.indexOf(maxSemana)] : "N/A";
+    recs.push({ t: "Día Crítico", d: maxSemana > 0 ? `Ten cuidado los ${dP}, son tus días de mayor consumo.` : "Aún no hay suficientes datos semanales.", i: "calendar", c: "#8b5cf6" });
+    
     const fS = tG * 3;
     recs.push({ t: "Fondo Emergencia", d: aTotal >= fS ? "Tienes un fondo sólido." : `Te faltan ${money(fS-aTotal)} para tu reserva ideal.`, i: "shield", c: "#14b8a6" });
 
@@ -138,7 +164,7 @@ export default function Reportes() {
       totIng: tI, totGas: tG, ahorroTotal: aTotal,
       catGastos: Object.values(cats).sort((a:any,b:any) => b.total - a.total) || [],
       mediosPago: Object.entries(medios).map(([nombre, total]) => ({ nombre, total })),
-      top10: [...gasL].sort((a,b) => b.monto - a.monto).slice(0, 10),
+      top10: [...gasL].sort((a,b) => Number(b.monto) - Number(a.monto)).slice(0, 10),
       heatMap: heat,
       diaSemana: ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((l, i) => ({ label: l, total: gSemana[i] })),
       evolMensual: evol,

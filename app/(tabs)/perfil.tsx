@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View, Modal, TextInput } from "react-native";
 import { supabase } from "../../lib/supabase";
 
@@ -16,9 +16,14 @@ export default function Perfil() {
   const [nuevoNombre, setNuevoNombre] = useState("");
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => { cargarPerfil(); }, []);
+  useFocusEffect(
+    useCallback(() => {
+      cargarPerfil();
+    }, [])
+  );
 
   async function cargarPerfil() {
+    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
     setEmail(user.email || "");
@@ -27,6 +32,9 @@ export default function Perfil() {
     if (data?.nombre) {
       setNombre(data.nombre);
       setNuevoNombre(data.nombre);
+    } else {
+      // Si no hay nombre en perfil, intentar sacarlo de los metadatos o dejar vacío
+      setNombre("");
     }
 
     const { data: movs } = await supabase.from("movimiento").select("tipo, monto").eq("usuario_id", user.id);
@@ -34,6 +42,8 @@ export default function Perfil() {
       const ing = movs.filter(m => String(m.tipo).toLowerCase() === "ingreso").reduce((s, m) => s + Math.abs(Number(m.monto)), 0);
       const gas = movs.filter(m => String(m.tipo).toLowerCase() === "gasto").reduce((s, m) => s + Math.abs(Number(m.monto)), 0);
       setStats({ movimientos: movs.length, ingresos: ing, gastos: gas });
+    } else {
+      setStats({ movimientos: 0, ingresos: 0, gastos: 0 });
     }
     setLoading(false);
   }

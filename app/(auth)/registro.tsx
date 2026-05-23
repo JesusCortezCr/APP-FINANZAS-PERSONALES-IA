@@ -26,7 +26,7 @@ export default function Registro() {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { nombre } },
+      options: { data: { full_name: nombre } },
     });
     if (error) Alert.alert("Error", error.message);
     else Alert.alert("¡Listo!", "Cuenta creada correctamente");
